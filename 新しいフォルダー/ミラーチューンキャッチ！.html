@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>ミラーチューン・キャッチ！</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=DotGothic16&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'DotGothic16', sans-serif;
+            background-color: #000;
+            color: #fff;
+            overflow: hidden;
+            touch-action: manipulation;
+        }
+        .game-frame {
+            width: 100%;
+            max-width: 420px;
+            background-color: #1a1a2e;
+            border-radius: 20px;
+            border: 2px solid #0ff;
+            box-shadow: 0 0 20px #0ff;
+            padding: 16px;
+            display: flex;
+            flex-direction: column;
+        }
+        canvas {
+            background-color: #111;
+            background-image:
+                linear-gradient(rgba(255, 255, 255, 0.05) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(255, 255, 255, 0.05) 1px, transparent 1px);
+            background-size: 20px 20px;
+            width: 100%;
+            height: auto;
+            border-radius: 8px;
+        }
+        .fever-time {
+             animation: fever-glow 0.5s infinite alternate;
+        }
+        @keyframes fever-glow {
+            from { box-shadow: 0 0 15px #f0f, 0 0 30px #f0f inset; border-color: #f0f;}
+            to { box-shadow: 0 0 30px #ff0, 0 0 60px #ff0 inset; border-color: #ff0;}
+        }
+        .text-glow {
+            text-shadow: 0 0 5px #fff, 0 0 10px #0ff, 0 0 15px #0ff;
+        }
+        .control-area {
+            width: 100%;
+            height: 80px;
+            background-color: rgba(0, 255, 255, 0.1);
+            border-radius: 8px;
+            margin-top: 16px;
+            cursor: grab;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: rgba(0, 255, 255, 0.5);
+        }
+        .control-area:active {
+            cursor: grabbing;
+            background-color: rgba(0, 255, 255, 0.2);
+        }
+    </style>
+</head>
+<body class="flex flex-col items-center justify-center min-h-screen p-4">
+
+    <h1 class="text-3xl sm:text-4xl text-center font-bold text-glow mb-6 whitespace-nowrap">ミラーチューン・キャッチ！</h1>
+
+    <div class="game-frame">
+        <!-- スコア表示 -->
+        <div class="flex justify-between text-xl font-bold mb-2 px-2">
+            <div id="score" class="text-cyan-300">SCORE: 0</div>
+            <div id="highScore" class="text-yellow-400">MAX: 0</div>
+        </div>
+
+        <!-- ゲームキャンバス -->
+        <div class="relative">
+            <canvas id="gameCanvas" width="480" height="640"></canvas>
+            <!-- ゲームオーバー画面は、このバージョンでは表示されません -->
+            <div id="gameOver" class="hidden"></div>
+            <div id="startScreen" class="absolute inset-0 bg-black bg-opacity-80 flex flex-col items-center justify-center text-white rounded-lg">
+                <p id="loadingText" class="text-2xl text-glow">NOW LOADING...</p>
+                <button id="startButton" class="hidden mt-8 px-8 py-4 bg-pink-500 text-white rounded-md text-3xl font-bold text-glow shadow-lg transition-transform hover:scale-105">START</button>
+            </div>
+            <div id="fever" class="absolute top-1/4 left-1/2 -translate-x-1/2 text-5xl font-bold text-pink-500 whitespace-nowrap" style="text-shadow: 0 0 15px #f0f;"></div>
+        </div>
+
+        <!-- 操作エリア -->
+        <div id="controlArea" class="control-area">
+            <p>◀ スライドして操作 ▶</p>
+        </div>
+    </div>
+
+
+    <script>
+        // --- 1. 初期設定 ---
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const scoreElement = document.getElementById('score');
+        const highScoreElement = document.getElementById('highScore');
+        const feverElement = document.getElementById('fever');
+        const startScreen = document.getElementById('startScreen');
+        const loadingText = document.getElementById('loadingText');
+        const startButton = document.getElementById('startButton');
+        const controlArea = document.getElementById('controlArea');
+
+        const imageSources = {
+            player: 'https://placehold.co/100x100/34d399/000000?text=PLAYER',
+            normalItem: 'https://placehold.co/60x60/f87171/000000?text=NOTE',
+            feverItem: 'https://placehold.co/60x60/f472b6/000000?text=UNIGURI'
+        };
+        const images = {};
+        
+        // --- ★★★ BGMと効果音の準備場所 ★★★ ---
+        // BGMや効果音のプレイヤーを、ここで変数として用意しておくと便利です。
+        let bgm, feverBgm, catchSound, feverCatchSound;
+
+        function loadAudio() {
+            // ここで、あらかじめ音楽ファイルを読み込んでおくこともできます。
+            // bgm = new Audio('ミラーチューン.mp3');
+            // catchSound = new Audio('あなたの効果音ファイル.wav');
+        }
+
+
+        function loadImages() {
+            const promises = Object.keys(imageSources).map(key => {
+                return new Promise((resolve) => {
+                    const img = new Image();
+                    img.onload = () => { images[key] = img; resolve(); };
+                    img.onerror = () => { console.error(`画像読み込み失敗: ${key}`); resolve(); };
+                    img.src = imageSources[key];
+                });
+            });
+            return Promise.all(promises);
+        }
+
+        // --- 描画関数 ---
+        function drawPlayerCharacter(ctx, x, y, width, height) { if (images.player) ctx.drawImage(images.player, x, y, width, height); }
+        function drawNormalItem(ctx, x, y, size) { if (images.normalItem) ctx.drawImage(images.normalItem, x, y, size, size); }
+        function drawFeverItem(ctx, x, y, size) { if (images.feverItem) ctx.drawImage(images.feverItem, x, y, size, size); }
+
+        // --- ゲームの状態管理 ---
+        let player, items, score, fever, feverTimeout, animationFrameId;
+        let highScore = localStorage.getItem('mirrorTuneHighScore') || 0;
+
+        function resetGame() {
+            player = { x: canvas.width / 2 - 35, y: canvas.height - 80, width: 70, height: 70 };
+            items = [];
+            score = 0;
+            fever = false;
+            if (feverTimeout) clearTimeout(feverTimeout);
+            if (animationFrameId) cancelAnimationFrame(animationFrameId);
+
+            canvas.classList.remove('fever-time');
+            feverElement.textContent = '';
+            scoreElement.textContent = 'SCORE: 0';
+            highScoreElement.textContent = 'MAX: ' + highScore;
+
+            for (let i = 0; i < 5; i++) spawnItem();
+        }
+        
+        function spawnItem() {
+            const isFeverItem = Math.random() < 0.1;
+            items.push({
+                x: Math.random() * (canvas.width - 35),
+                y: -35,
+                size: 35,
+                speed: 2 + Math.random() * 2,
+                isFever: isFeverItem,
+                draw: isFeverItem ? drawFeverItem : drawNormalItem
+            });
+        }
+        
+        function startFeverTime() {
+            if (fever) return;
+            fever = true;
+
+            // --- ★★★ フィーバーBGMの再生場所 ★★★ ---
+            // if (bgm) bgm.pause(); // 通常BGMを止める
+            // feverBgm = new Audio('フィーバー中の曲.mp3');
+            // feverBgm.play();
+            // ------------------------------------
+
+            feverElement.textContent = 'FEVER TIME!';
+            canvas.classList.add('fever-time');
+            if (feverTimeout) clearTimeout(feverTimeout);
+            feverTimeout = setTimeout(() => {
+                fever = false;
+                feverElement.textContent = '';
+                canvas.classList.remove('fever-time');
+
+                // --- ★★★ 通常BGMを再開する場所 ★★★ ---
+                // if(feverBgm) feverBgm.pause();
+                // if(bgm) bgm.play();
+                // ------------------------------------
+
+            }, 10000);
+        }
+
+        // --- 操作の受付 ---
+        function handleTouch(e) {
+            e.preventDefault();
+            const rect = controlArea.getBoundingClientRect();
+            const touchX = (e.touches[0] || e.changedTouches[0]).clientX - rect.left;
+            const ratio = touchX / rect.width;
+            player.x = (canvas.width - player.width) * ratio;
+            player.x = Math.max(0, Math.min(canvas.width - player.width, player.x));
+        }
+        controlArea.addEventListener('touchstart', handleTouch);
+        controlArea.addEventListener('touchmove', handleTouch);
+
+        // --- ゲームループ ---
+        function gameLoop() {
+            // 更新処理
+            items.forEach((item, index) => {
+                item.y += item.speed;
+                if (item.y + item.size > player.y && item.y < player.y + player.height &&
+                    item.x + item.size > player.x && item.x < player.x + player.width) {
+                    
+                    // --- ★★★ 効果音の再生場所 ★★★ ---
+                    // const sound = item.isFever ? new Audio('fever_catch.wav') : new Audio('normal_catch.wav');
+                    // sound.play();
+                    // ---------------------------------
+
+                    let point = item.isFever ? 100 : 10;
+                    if (fever) point *= 2;
+                    score += point;
+                    if (item.isFever) startFeverTime();
+                    items.splice(index, 1);
+                    spawnItem();
+                }
+                
+                // 【変更点】ゲームオーバーの概念をなくす
+                if (item.y > canvas.height) {
+                    items.splice(index, 1);
+                    spawnItem();
+                }
+            });
+            
+            // 描画処理
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            drawPlayerCharacter(ctx, player.x, player.y, player.width, player.height);
+            items.forEach(item => { item.draw(ctx, item.x, item.y, item.size); });
+            scoreElement.textContent = 'SCORE: ' + score;
+
+            if (score > highScore) {
+                 highScore = score;
+                 highScoreElement.textContent = 'MAX: ' + highScore;
+                 localStorage.setItem('mirrorTuneHighScore', highScore);
+            }
+
+            animationFrameId = requestAnimationFrame(gameLoop);
+        }
+
+        // --- ゲーム開始の準備 ---
+        async function prepareGame() {
+            try {
+                await loadImages();
+                // loadAudio(); // もし音声の事前ロードをするなら
+                loadingText.classList.add('hidden');
+                startButton.classList.remove('hidden');
+            } catch (err) {
+                console.error("ゲームの準備に失敗:", err);
+                loadingText.innerHTML = '<p class="text-red-500">エラー発生。更新してください。</p>';
+            }
+        }
+        
+        startButton.addEventListener('click', () => {
+             startScreen.classList.add('hidden');
+
+             // --- ★★★ 通常BGMの再生開始場所 ★★★ ---
+             // bgm = new Audio('ミラーチューン.mp3');
+             // bgm.loop = true;
+             // bgm.play().catch(e => console.error("BGMの再生に失敗:", e));
+             // ------------------------------------
+             
+             resetGame();
+             gameLoop();
+        });
+
+        prepareGame();
+    </script>
+</body>
+</html>
